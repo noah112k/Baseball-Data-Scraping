@@ -1,0 +1,117 @@
+---
+title: "Baseball Data Scraping"
+author: "Noah Jones"
+date: "10/12/2021"
+output: pdf_document
+---
+
+## Part 1. Scrape baseball-reference.com with rvest
+
+```{r baseball_rvest, error = TRUE, message = FALSE}
+library(rvest)
+library(dplyr)
+# starting page
+teampage <- read_html("http://www.baseball-reference.com/teams/")
+teams <- teampage %>% 
+  html_nodes(".left a") %>% 
+  html_text()
+
+session <- html_session("http://www.baseball-reference.com/teams/")
+
+# create a table called baseball that contains all of the teams' franchise histories
+
+baseball <- data.frame()
+for(i in seq_along(teams)) {
+  team_name <- teams[i]
+  team_history <- session %>% 
+    follow_link(team_name) %>% 
+    read_html() %>% 
+    html_node("#franchise_years") %>% 
+    html_table()
+  team_history$GB <- as.character(team_history$GB)
+  team_history$current_name <- team_history$Tm[1]
+  if(i==1) {
+    baseball <- team_history
+  } else {
+    baseball <- full_join(baseball, team_history) 
+  }
+}
+  
+
+# at the end, be sure to print out the dimensions of your baseball table
+dim(baseball)
+
+# also print the head of the table
+head(baseball)
+```
+
+**Some light text clean up**
+
+```{r baseball_cleanup, error = TRUE, echo = FALSE}
+library(stringr)
+# This code checks to see if text in table has regular space character
+all.equal(charToRaw(baseball$Tm[1]), charToRaw("Arizona Diamondbacks"))
+
+# identify which columns are character columns
+char_cols <- which(lapply(baseball, typeof) == "character")
+
+# This loop: for each character column, convert to UTF-8
+# then replace the non-breaking space with a regular space
+for(i in char_cols) {
+    baseball[[i]] <- str_conv(baseball[[i]], "UTF-8")
+    baseball[[i]] <- str_replace_all(baseball[[i]],"\\s"," ")
+}
+
+# We check to see if the conversion worked.
+# If the following returns TRUE, then it worked
+all.equal(charToRaw(baseball$Tm[1]), charToRaw("Arizona Diamondbacks"))
+```
+
+## Part 2. dplyr to summarize the baseball data
+
+```{r baseball_dplyr}
+
+# Printing a summary table of our scraped data
+
+baseball_summary <- baseball %>% 
+  filter(Year %in% 2001:2020) %>% 
+  group_by(current_name) %>% 
+  summarise("Wins" = sum(W), "Losses" = sum(L), "Runs" = sum(R), "Runs Allowed" = sum(RA), "Win Pct" = sum(W)/(sum(W)+sum(L)), .groups = "keep") %>% 
+  arrange(desc(`Win Pct`))
+print(baseball_summary, n=30)
+  
+```
+
+## 3. Regular expressions to extract values in the Managers Column
+
+
+```{r baseball_regex}
+# Using regular expressions to extract first and last names
+
+managers_data <- str_match_all(baseball$Managers, "([A-Z]\\.[^\\(]+) \\((\\d+)-(\\d+)")
+
+names <- character(0)
+wins <- numeric(0)
+losses <- numeric(0)
+
+# Extracting the data we want from the matrices into vector form
+for(i in seq_along(managers_data)){
+  for(j in seq_along(1:nrow(managers_data[[i]]))){
+    names <- append(names, managers_data[[i]][j,2])
+    wins <- append(wins, as.numeric(managers_data[[i]][j,3]))
+    losses <- append(losses, as.numeric(managers_data[[i]][j,4]))
+  }
+}
+# Using the vectors to create a tibble, and then using dplyr to get the desired result
+managers <- tibble(
+  Name = names,
+  Wins = wins,
+  Losses = losses
+)
+
+managers %>% 
+  mutate(Games = Wins + Losses) %>%
+  group_by(Name) %>% 
+  summarise(Games = sum(Games), Wins = sum(Wins), Losses = sum(Losses), Win_Pct = sum(Wins)/sum(Games)) %>% 
+  arrange(desc(Games))
+```
